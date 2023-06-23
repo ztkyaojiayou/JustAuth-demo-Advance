@@ -49,27 +49,56 @@ public class RestAuthController {
     @Autowired
     private UserService userService;
 
+    /**
+     * 生成授权页url
+     * 目的：用于登录用户点击该url来完成第三方登录平台的授权
+     * 具体的oauth授权流程也就是在这一步完成的，
+     * 大致流程或原理为：
+     * 当前用户点击该授权链接时，就会自动跳到第三方平台的授权页面，
+     * 此时用户登录该平台（扫码或用户名密码登录）并点击授权按钮，
+     * 之后第三方平台就会验证并通过下面的回调地址（我们需要事先在第三方平台上设置好）返回token给我们！
+     * 具体就是我们通过AuthCallback类来接收第三方平台给我们的回调信息！！！
+     * 拿到token后，我们就可以根据该token去请求第三方平台以获取该用户的基本信息啦！！！
+     * （就是普通的http请求啦，而具体的请求url则就有该框架给我们封装好啦，这也是该框架的核心功能之一！！！）
+     * <p>
+     * 但以上流程我们在实际接入时并不需要关心！！！
+     *
+     * @param source
+     * @param response
+     * @throws IOException
+     */
     @RequestMapping("/render/{source}")
     @ResponseBody
     public void renderAuth(@PathVariable("source") String source, HttpServletResponse response) throws IOException {
         log.info("进入render：" + source);
+        //构造请求第三方登录平台url的请求链接
         AuthRequest authRequest = getAuthRequest(source);
+        //获取授权地址
         String authorizeUrl = authRequest.authorize(AuthStateUtils.createState());
         log.info(authorizeUrl);
+        //直接通过重定向返回给前端，供用户点击并授权第三方平台授权和登录
         response.sendRedirect(authorizeUrl);
     }
 
     /**
+     * 接收回调
+     * 也即授权成功后第三方平台通过调用该接口返回token，
+     * 于是我们就可以根据该token去第三方平台请求获取该用户的基础信息啦！！！
+     * 之后我们就可以将其进行存库或注册操作！！！
      * oauth平台中配置的授权回调地址，以本项目为例，在创建github授权应用时的回调地址应为：http://127.0.0.1:8443/oauth/callback/github
      */
     @RequestMapping("/callback/{source}")
-    public ModelAndView login(@PathVariable("source") String source, AuthCallback callback, HttpServletRequest request) {
+    public ModelAndView login(@PathVariable("source") String source, AuthCallback callback,
+                              HttpServletRequest request) {
         log.info("进入callback：" + source + " callback params：" + JSONObject.toJSONString(callback));
         AuthRequest authRequest = getAuthRequest(source);
+        //根据token请求第三方平台以获取该用户的基本信息
+        //因为这一步也可以大致理解为登录，因此这里使用login命名！！！
         AuthResponse<AuthUser> response = authRequest.login(callback);
         log.info(JSONObject.toJSONString(response));
 
         if (response.ok()) {
+            //保存该用户信息（包含token）
             userService.save(response.getData());
             return new ModelAndView("redirect:/users");
         }
@@ -80,6 +109,15 @@ public class RestAuthController {
         return new ModelAndView("error", map);
     }
 
+    /**
+     * 取消授权（部分平台支持）
+     * 也即把已授权的账户的账户信息在我们的项目中删除！！！
+     *
+     * @param source 第三方平台类型
+     * @param uuid   要取消授权的用户的uuid，也即该账户在第三方平台中的唯一标识
+     * @return
+     * @throws IOException
+     */
     @RequestMapping("/revoke/{source}/{uuid}")
     @ResponseBody
     public Response revokeAuth(@PathVariable("source") String source, @PathVariable("uuid") String uuid) throws IOException {
@@ -102,20 +140,32 @@ public class RestAuthController {
         }
     }
 
+    /**
+     * 刷新token（部分平台支持）
+     * 也即重新请求一次token信息并刷新原信息
+     *
+     * @param source
+     * @param uuid   要刷新token的用户的uuid
+     * @return
+     */
     @RequestMapping("/refresh/{source}/{uuid}")
     @ResponseBody
     public Object refreshAuth(@PathVariable("source") String source, @PathVariable("uuid") String uuid) {
         AuthRequest authRequest = getAuthRequest(source.toLowerCase());
-
+//获取该账户在本项目中原存储的信息
         AuthUser user = userService.getByUuid(uuid);
         if (null == user) {
             return Response.error("用户不存在");
         }
         AuthResponse<AuthToken> response = null;
         try {
+            //重写获取/请求token信息
+            //注意：这里就只返回了token信息，而不再返回基本信息，因为已经有了呀！！！
             response = authRequest.refresh(user.getToken());
             if (response.ok()) {
+                //刷新token信息
                 user.setToken(response.getData());
+                //再存入redis
                 userService.save(user);
                 return Response.success("用户 [" + user.getUsername() + "] 的 access token 已刷新！新的 accessToken: " + response.getData().getAccessToken());
             }
@@ -251,7 +301,8 @@ public class RestAuthController {
                         .clientId("")
                         .clientSecret("")
                         .redirectUri("http://localhost:8443/oauth/callback/google")
-                        .scopes(AuthScopeUtils.getScopes(AuthGoogleScope.USER_EMAIL, AuthGoogleScope.USER_PROFILE, AuthGoogleScope.USER_OPENID))
+                        .scopes(AuthScopeUtils.getScopes(AuthGoogleScope.USER_EMAIL, AuthGoogleScope.USER_PROFILE,
+                                AuthGoogleScope.USER_OPENID))
                         // 针对国外平台配置代理
                         .httpConfig(HttpConfig.builder()
                                 .timeout(15000)

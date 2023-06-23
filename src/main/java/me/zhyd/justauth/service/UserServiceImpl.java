@@ -24,8 +24,12 @@ public class UserServiceImpl implements UserService {
     @Autowired
     private RedisTemplate redisTemplate;
 
+    //也是用于操作hash类型的redis操作类，该操作类需要先定义key，之后的put和get操作就都是filed中的key和value了！！！
     private BoundHashOperations<String, String, AuthUser> valueOperations;
 
+    /**
+     * 先定义key！！！
+     */
     @PostConstruct
     public void init() {
         valueOperations = redisTemplate.boundHashOps("JUSTAUTH::USERS");
@@ -33,16 +37,19 @@ public class UserServiceImpl implements UserService {
 
     @Override
     public AuthUser save(AuthUser user) {
+        //存储用户信息到redis中，这里的key和value属于filed了，都是隶属于上述已定义好的key下的！！！
         valueOperations.put(user.getUuid(), user);
         return user;
     }
 
     @Override
     public AuthUser getByUuid(String uuid) {
+        //由于已经配置/替换了全局的redis序列化器，因此其实可以直接使用AuthUser接收！！！
         Object user = valueOperations.get(uuid);
-        if(null == user) {
+        if (null == user) {
             return null;
         }
+        //其实没有必要，直接就可以被反序列化成目标对象AuthUser
         return JSONObject.parseObject(JSONObject.toJSONString(user), AuthUser.class);
     }
 
